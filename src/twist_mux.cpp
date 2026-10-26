@@ -67,6 +67,8 @@ namespace twist_mux
 {
 // see e.g. https://stackoverflow.com/a/40691657
 constexpr std::chrono::duration<int64_t> TwistMux::DIAGNOSTICS_PERIOD;
+constexpr std::chrono::milliseconds TwistMux::ACTIVE_CHECK_PERIOD;
+constexpr const char * TwistMux::NO_ACTIVE_NAME;
 
 TwistMux::TwistMux()
 : Node("twist_mux", "",
@@ -127,6 +129,57 @@ void TwistMux::init()
     DIAGNOSTICS_PERIOD, [this]() -> void {
       updateDiagnostics();
     });
+
+  /// Active topic name, latched so late subscribers get the current value:
+  active_pub_ = this->create_publisher<std_msgs::msg::String>(
+    "~/active",
+    rclcpp::QoS(rclcpp::KeepLast(1)).reliable().transient_local());
+
+  active_name_ = getActiveName();
+  publishActive();
+
+  active_timer_ = this->create_wall_timer(
+    ACTIVE_CHECK_PERIOD, [this]() -> void {
+      updateActive();
+    });
+}
+
+void TwistMux::updateActive()
+{
+  setActive(getActiveName());
+}
+
+std::string TwistMux::getActiveName()
+{
+  if (velocity_hs_) {
+    return getActiveName(*velocity_hs_);
+  }
+  return getActiveName(*velocity_stamped_hs_);
+}
+
+void TwistMux::setActive(const std::string & name)
+{
+  if (name == active_name_) {
+    return;
+  }
+
+  RCLCPP_DEBUG(
+    get_logger(), "Active topic changed from '%s' to '%s'.",
+    active_name_.c_str(), name.c_str());
+
+  active_name_ = name;
+  publishActive();
+}
+
+void TwistMux::publishActive()
+{
+  // Handle names are full parameter prefixes, e.g. "topics.joystick";
+  // publish only the key as it appears under "topics" in the config.
+  const auto dot = active_name_.find('.');
+
+  std_msgs::msg::String msg;
+  msg.data = (dot == std::string::npos) ? active_name_ : active_name_.substr(dot + 1);
+  active_pub_->publish(msg);
 }
 
 void TwistMux::updateDiagnostics()
@@ -200,16 +253,17 @@ int TwistMux::getLockPriority()
   return priority;
 }
 
-bool TwistMux::hasPriority(const VelocityTopicHandle & twist)
+template<typename T>
+std::string TwistMux::getActiveName(const handle_container<T> & velocity_hs)
 {
   const auto lock_priority = getLockPriority();
 
   LockTopicHandle::priority_type priority = 0;
-  std::string velocity_name = "NULL";
+  std::string velocity_name = NO_ACTIVE_NAME;
 
   /// max_element on the priority of velocity topic handles satisfying
   /// that is NOT masked by the lock priority:
-  for (const auto & velocity_h : *velocity_hs_) {
+  for (const auto & velocity_h : velocity_hs) {
     if (!velocity_h.isMasked(lock_priority)) {
       const auto velocity_priority = velocity_h.getPriority();
       if (priority < velocity_priority) {
@@ -219,28 +273,26 @@ bool TwistMux::hasPriority(const VelocityTopicHandle & twist)
     }
   }
 
+  return velocity_name;
+}
+
+bool TwistMux::hasPriority(const VelocityTopicHandle & twist)
+{
+  const auto velocity_name = getActiveName(*velocity_hs_);
+
+  // Report a change of source immediately rather than on the next timer tick.
+  setActive(velocity_name);
+
   return twist.getName() == velocity_name;
 }
 
 
 bool TwistMux::hasPriorityStamped(const VelocityStampedTopicHandle & twist)
 {
-  const auto lock_priority = getLockPriority();
+  const auto velocity_name = getActiveName(*velocity_stamped_hs_);
 
-  LockTopicHandle::priority_type priority = 0;
-  std::string velocity_name = "NULL";
-
-  /// max_element on the priority of velocity topic handles satisfying
-  /// that is NOT masked by the lock priority:
-  for (const auto & velocity_stamped_h : *velocity_stamped_hs_) {
-    if (!velocity_stamped_h.isMasked(lock_priority)) {
-      const auto velocity_priority = velocity_stamped_h.getPriority();
-      if (priority < velocity_priority) {
-        priority = velocity_priority;
-        velocity_name = velocity_stamped_h.getName();
-      }
-    }
-  }
+  // Report a change of source immediately rather than on the next timer tick.
+  setActive(velocity_name);
 
   return twist.getName() == velocity_name;
 }

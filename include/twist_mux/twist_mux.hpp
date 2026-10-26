@@ -37,6 +37,7 @@
 
 #include <rclcpp/rclcpp.hpp>
 #include <std_msgs/msg/bool.hpp>
+#include <std_msgs/msg/string.hpp>
 #include <geometry_msgs/msg/twist.hpp>
 #include <geometry_msgs/msg/twist_stamped.hpp>
 
@@ -84,13 +85,25 @@ public:
 
   void updateDiagnostics();
 
+  /**
+   * @brief updateActive Recompute the active velocity topic and publish its
+   * name on ~/active if it changed. Called periodically so that timeouts are
+   * reported even when no new message arrives.
+   */
+  void updateActive();
+
 protected:
   typedef TwistMuxDiagnostics diagnostics_type;
   typedef TwistMuxDiagnosticsStatus status_type;
 
   rclcpp::TimerBase::SharedPtr diagnostics_timer_;
+  rclcpp::TimerBase::SharedPtr active_timer_;
 
   static constexpr std::chrono::duration<int64_t> DIAGNOSTICS_PERIOD = 1s;
+  static constexpr std::chrono::milliseconds ACTIVE_CHECK_PERIOD{50};
+
+  /// Name reported on ~/active when no velocity topic is selected.
+  static constexpr const char * NO_ACTIVE_NAME = "";
 
   /**
    * @brief velocity_hs_ Velocity topics' handles.
@@ -104,6 +117,9 @@ protected:
 
   rclcpp::Publisher<geometry_msgs::msg::Twist>::SharedPtr cmd_pub_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr cmd_pub_stamped_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr active_pub_;
+
+  std::string active_name_;
 
   geometry_msgs::msg::Twist last_cmd_;
   geometry_msgs::msg::TwistStamped last_cmd_stamped_;
@@ -112,6 +128,20 @@ protected:
   void getTopicHandles(const std::string & param_name, handle_container<T> & topic_hs);
 
   int getLockPriority();
+
+  /**
+   * @brief getActiveName Name of the highest priority velocity topic that is
+   * not masked by the current lock priority; ties go to the first handle.
+   * @return NO_ACTIVE_NAME if no topic is selected
+   */
+  template<typename T>
+  std::string getActiveName(const handle_container<T> & velocity_hs);
+
+  std::string getActiveName();
+
+  void setActive(const std::string & name);
+
+  void publishActive();
 
   std::shared_ptr<diagnostics_type> diagnostics_;
   std::shared_ptr<status_type> status_;

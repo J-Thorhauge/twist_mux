@@ -1,0 +1,17 @@
+twist_mux:
+  ros__parameters:
+    use_stamped: false
+    topics:
+      high:
+        topic   : vel_high
+        timeout : 0.3
+        priority: 100
+      low:
+        topic   : vel_low
+        timeout : 0.3
+        priority: 10
+    locks:
+      pause:
+        topic   : lock_pause
+        timeout : 0.0
+        priority: 50
